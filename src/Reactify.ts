@@ -21,14 +21,26 @@ export type FiberNode = {
 };
 
 export default class Reactify {
-  static nextUnitOfWork: FiberNode | null;
+  private static nextUnitOfWork: FiberNode | null;
+  private static debugMode = false;
+
+  static setDebugMode(enabled: boolean) {
+    Reactify.debugMode = enabled;
+    console.log(`Debug mode set to ${enabled ? "ON" : "OFF"}`);
+  }
+
+  private static log(...args: any[]) {
+    if (Reactify.debugMode) {
+      console.log("[Reactify]", ...args);
+    }
+  }
 
   static createElement(
     type: ElementType,
     props: { [key: string]: any } | null = null,
     ...children: (ReactifyElement | string)[]
   ): ReactifyElement {
-    return {
+    const element = {
       type,
       props: {
         ...props,
@@ -37,21 +49,25 @@ export default class Reactify {
         ),
       },
     };
+    Reactify.log("createElement:", element);
+    return element;
   }
 
   private static createTextElement(text: string): ReactifyElement {
-    return {
-      type: "TEXT_ELEMENT",
+    const textElement = {
+      type: "TEXT_ELEMENT" as ElementType,
       props: {
         value: text,
         children: [],
       },
     };
+    Reactify.log("createTextElement:", textElement);
+    return textElement;
   }
 
   private static createDomElement(fiberNode: FiberNode) {
+    Reactify.log("Creating DOM element for fiber:", fiberNode);
     const isTextElement = fiberNode.type === "TEXT_ELEMENT";
-
     const DomElement = isTextElement
       ? document.createTextNode(fiberNode.props.value)
       : document.createElement(fiberNode.type);
@@ -65,10 +81,12 @@ export default class Reactify {
         });
     }
 
+    Reactify.log("DOM element created:", DomElement);
     return DomElement;
   }
 
   static render(reactifyElement: ReactifyElement, container: HTMLElement) {
+    Reactify.log("Starting render for element:", reactifyElement, "into container:", container);
     this.nextUnitOfWork = {
       type: container.tagName as ElementType,
       currentDomElement: container,
@@ -82,14 +100,19 @@ export default class Reactify {
     requestIdleCallback((deadline) => this.workLoop(deadline));
   }
 
-  static workLoop(deadline: { timeRemaining: () => number }) {
+  private static workLoop(deadline: { timeRemaining: () => number }) {
+    Reactify.log("Starting work loop");
     while (this.nextUnitOfWork && deadline.timeRemaining() > 0) {
+      Reactify.log("Performing unit of work:", this.nextUnitOfWork);
       this.performUnitOfWork();
     }
-    requestIdleCallback((deadline) => this.workLoop(deadline));
+    if (this.nextUnitOfWork) {
+      requestIdleCallback((deadline) => this.workLoop(deadline));
+    }
   }
 
-  static performUnitOfWork() {
+  private static performUnitOfWork() {
+    Reactify.log("Processing nextUnitOfWork:", this.nextUnitOfWork);
     if (!this.nextUnitOfWork) return;
 
     if (!this.nextUnitOfWork.currentDomElement) {
