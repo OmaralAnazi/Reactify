@@ -2,32 +2,37 @@ export type ElementType = keyof HTMLElementTagNameMap | "TEXT_ELEMENT";
 
 export type ReactifyElement = {
   type: ElementType;
-  props: {
-    [key: string]: any;
-    children: ReactifyElement[];
-  };
+  props: Props;
+};
+
+export type EffectTag = "UPDATE" | "PLACEMENT" | "DELETION";
+
+export type Props = {
+  [key: string]: any;
+  children: ReactifyElement[];
 };
 
 export type FiberNode = {
   type: ElementType;
   currentDomElement: HTMLElement | Text | null;
-  fiberParent: FiberNode | null;
+  parentFiber: FiberNode | null;
   child: FiberNode | null;
   sibling: FiberNode | null;
-  props: {
-    [key: string]: any;
-    children: ReactifyElement[];
-  };
+  alternate: FiberNode | null;
+  effectTag: EffectTag;
+  props: Props;
 };
 
 export default class Reactify {
   private static workInProgressRoot: FiberNode | null;
   private static nextUnitOfWork: FiberNode | null;
+  private static currentRoot: FiberNode | null;
+  private static deletions: FiberNode[] = [];
   private static debugMode = false;
 
   static setDebugMode(enabled: boolean) {
     Reactify.debugMode = enabled;
-    console.log(`Debug mode set to ${enabled ? "ON" : "OFF"}`);
+    console.log(`[Reactify] Debug mode set to ${enabled ? "ON" : "OFF"}`);
   }
 
   private static log(...args: any[]) {
@@ -38,7 +43,7 @@ export default class Reactify {
 
   static createElement(
     type: ElementType,
-    props: { [key: string]: any } | null = null,
+    props: Props | null = null,
     ...children: (ReactifyElement | string)[]
   ): ReactifyElement {
     const element = {
@@ -89,9 +94,11 @@ export default class Reactify {
     Reactify.workInProgressRoot = Reactify.nextUnitOfWork = {
       type: container.tagName as ElementType,
       currentDomElement: container,
-      fiberParent: null,
+      parentFiber: null,
       child: null,
       sibling: null,
+      alternate: Reactify.currentRoot,
+      effectTag: "PLACEMENT", // this value will not be used for the workInProgressRoot, but we have to set it anyway...
       props: {
         children: [reactifyElement],
       },
@@ -114,8 +121,10 @@ export default class Reactify {
 
   private static commitRoot() {
     Reactify.log("Committing changes to root...");
+    Reactify.deletions.forEach(Reactify.commitWork);
     if (Reactify.workInProgressRoot && Reactify.workInProgressRoot.child) {
       Reactify.commitWork(Reactify.workInProgressRoot.child);
+      Reactify.currentRoot = Reactify.workInProgressRoot;
       Reactify.log("Changes committed successfully.");
       Reactify.workInProgressRoot = null;
     }
@@ -124,17 +133,64 @@ export default class Reactify {
   private static commitWork(fiber: FiberNode) {
     Reactify.log(`Committing work for fiber: ${fiber.type}`);
     if (
-      fiber.fiberParent &&
+      fiber.parentFiber &&
       fiber.currentDomElement &&
-      fiber.fiberParent.currentDomElement &&
-      fiber.fiberParent.currentDomElement instanceof HTMLElement
+      fiber.parentFiber.currentDomElement &&
+      fiber.parentFiber.currentDomElement instanceof HTMLElement
     ) {
-      const domParent = fiber.fiberParent.currentDomElement;
-      domParent.appendChild(fiber.currentDomElement);
-      Reactify.log(`Appended ${fiber.type} to ${domParent.tagName}`);
+      const domParent = fiber.parentFiber.currentDomElement;
+      if (fiber.effectTag === "PLACEMENT") {
+        domParent.appendChild(fiber.currentDomElement);
+      } else if (fiber.effectTag === "UPDATE" && fiber.alternate) {
+        Reactify.updateDom(fiber.currentDomElement, fiber.alternate.props, fiber.props);
+      } else if (fiber.effectTag === "DELETION" && domParent.contains(fiber.currentDomElement)) {
+        domParent.removeChild(fiber.currentDomElement);
+      }
+
       if (fiber.child) Reactify.commitWork(fiber.child);
       if (fiber.sibling) Reactify.commitWork(fiber.sibling);
     }
+  }
+
+  private static isEvent = (key: string) => key.startsWith("on");
+  private static isProperty = (key: string) => key !== "children";
+  private static isNew = (prevProps: Props, nextProps: Props) => (key: string) => prevProps[key] !== nextProps[key];
+  private static isGone = (nextProps: Props) => (key: string) => !(key in nextProps);
+
+  private static updateDom(domElement: HTMLElement | Text, prevProps: Props, nextProps: Props) {
+    if (domElement instanceof Text) {
+      if (prevProps.value !== nextProps.value) {
+        domElement.nodeValue = nextProps.value;
+      }
+      return;
+    }
+
+    // Remove old properties
+    Object.keys(prevProps)
+      .filter(Reactify.isProperty)
+      .filter(Reactify.isGone(nextProps))
+      .forEach((key) => {
+        // @ts-ignore
+        domElement[key] = "";
+      });
+
+    // Set new or changed properties
+    Object.keys(nextProps)
+      .filter(Reactify.isProperty)
+      .filter(Reactify.isNew(prevProps, nextProps))
+      .forEach((key) => {
+        // @ts-ignore
+        domElement[key] = nextProps[key];
+      });
+
+    // Add event listeners
+    Object.keys(nextProps)
+      .filter(Reactify.isEvent)
+      .filter(Reactify.isNew(prevProps, nextProps))
+      .forEach((key) => {
+        const eventType = key.toLowerCase().substring(2);
+        domElement.addEventListener(eventType, nextProps[key]);
+      });
   }
 
   private static performUnitOfWork() {
@@ -146,27 +202,7 @@ export default class Reactify {
     }
 
     const children = Reactify.nextUnitOfWork.props.children;
-    let prevSibling: FiberNode | null = null;
-
-    children.forEach((child, index) => {
-      if (!Reactify.nextUnitOfWork) return;
-
-      const newFiber: FiberNode = {
-        type: child.type,
-        currentDomElement: null,
-        fiberParent: Reactify.nextUnitOfWork,
-        child: null,
-        sibling: null,
-        props: child.props,
-      };
-
-      if (index === 0) {
-        Reactify.nextUnitOfWork.child = newFiber;
-      } else if (prevSibling) {
-        prevSibling.sibling = newFiber;
-      }
-      prevSibling = newFiber;
-    });
+    Reactify.reconcileChildren(children);
 
     if (Reactify.nextUnitOfWork.child) {
       Reactify.nextUnitOfWork = Reactify.nextUnitOfWork.child;
@@ -178,9 +214,9 @@ export default class Reactify {
       return;
     }
 
-    let ancestor = Reactify.nextUnitOfWork.fiberParent;
+    let ancestor = Reactify.nextUnitOfWork.parentFiber;
     while (ancestor && !ancestor.sibling) {
-      ancestor = ancestor.fiberParent;
+      ancestor = ancestor.parentFiber;
     }
     if (ancestor && ancestor.sibling) {
       Reactify.nextUnitOfWork = ancestor.sibling;
@@ -188,5 +224,60 @@ export default class Reactify {
     }
 
     Reactify.nextUnitOfWork = null;
+  }
+
+  private static reconcileChildren(children: ReactifyElement[]) {
+    if (!Reactify.nextUnitOfWork) return;
+
+    let prevSibling: FiberNode | null = null;
+    let oldFiber = Reactify.nextUnitOfWork.alternate && Reactify.nextUnitOfWork.alternate.child;
+    let index = 0;
+
+    while (index < children.length || oldFiber != null) {
+      const child = children[index];
+      let newFiber: FiberNode | null = null;
+
+      const sameType = oldFiber && child && child.type == oldFiber.type;
+      if (sameType && oldFiber) {
+        newFiber = {
+          type: oldFiber.type,
+          currentDomElement: oldFiber.currentDomElement,
+          parentFiber: Reactify.nextUnitOfWork,
+          child: null,
+          sibling: null,
+          alternate: oldFiber,
+          effectTag: "UPDATE",
+          props: child.props,
+        };
+      }
+      if (child && !sameType) {
+        newFiber = {
+          type: child.type,
+          currentDomElement: null,
+          parentFiber: Reactify.nextUnitOfWork,
+          child: null,
+          sibling: null,
+          alternate: null,
+          effectTag: "PLACEMENT",
+          props: child.props,
+        };
+      }
+      if (oldFiber && !sameType) {
+        oldFiber.effectTag = "DELETION";
+        Reactify.deletions.push(oldFiber);
+      }
+
+      if (oldFiber) {
+        oldFiber = oldFiber.sibling;
+      }
+
+      if (index === 0) {
+        Reactify.nextUnitOfWork.child = newFiber;
+      } else if (prevSibling) {
+        prevSibling.sibling = newFiber;
+      }
+      prevSibling = newFiber;
+      index++;
+    }
   }
 }
