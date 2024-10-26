@@ -11,7 +11,7 @@ export type ReactifyElement = {
 export type FiberNode = {
   type: ElementType;
   currentDomElement: HTMLElement | Text | null;
-  domParent: FiberNode | null;
+  fiberParent: FiberNode | null;
   child: FiberNode | null;
   sibling: FiberNode | null;
   props: {
@@ -21,6 +21,7 @@ export type FiberNode = {
 };
 
 export default class Reactify {
+  private static workInProgressRoot: FiberNode | null;
   private static nextUnitOfWork: FiberNode | null;
   private static debugMode = false;
 
@@ -44,9 +45,7 @@ export default class Reactify {
       type,
       props: {
         ...props,
-        children: children.map((child) =>
-          typeof child === "object" ? child : Reactify.createTextElement(child)
-        ),
+        children: children.map((child) => (typeof child === "object" ? child : Reactify.createTextElement(child))),
       },
     };
     Reactify.log("createElement:", element);
@@ -87,88 +86,107 @@ export default class Reactify {
 
   static render(reactifyElement: ReactifyElement, container: HTMLElement) {
     Reactify.log("Starting render for element:", reactifyElement, "into container:", container);
-    this.nextUnitOfWork = {
+    Reactify.workInProgressRoot = Reactify.nextUnitOfWork = {
       type: container.tagName as ElementType,
       currentDomElement: container,
-      domParent: null,
+      fiberParent: null,
       child: null,
       sibling: null,
       props: {
         children: [reactifyElement],
       },
     };
-    requestIdleCallback((deadline) => this.workLoop(deadline));
+    requestIdleCallback((deadline) => Reactify.workLoop(deadline));
   }
 
   private static workLoop(deadline: { timeRemaining: () => number }) {
     Reactify.log("Starting work loop");
-    while (this.nextUnitOfWork && deadline.timeRemaining() > 0) {
-      Reactify.log("Performing unit of work:", this.nextUnitOfWork);
-      this.performUnitOfWork();
+    while (Reactify.nextUnitOfWork && deadline.timeRemaining() > 0) {
+      Reactify.log("Performing unit of work:", Reactify.nextUnitOfWork);
+      Reactify.performUnitOfWork();
     }
-    if (this.nextUnitOfWork) {
-      requestIdleCallback((deadline) => this.workLoop(deadline));
+    if (Reactify.nextUnitOfWork) {
+      requestIdleCallback((deadline) => Reactify.workLoop(deadline));
+    } else if (Reactify.workInProgressRoot) {
+      Reactify.commitRoot();
+    }
+  }
+
+  private static commitRoot() {
+    Reactify.log("Committing changes to root...");
+    if (Reactify.workInProgressRoot && Reactify.workInProgressRoot.child) {
+      Reactify.commitWork(Reactify.workInProgressRoot.child);
+      Reactify.log("Changes committed successfully.");
+      Reactify.workInProgressRoot = null;
+    }
+  }
+
+  private static commitWork(fiber: FiberNode) {
+    Reactify.log(`Committing work for fiber: ${fiber.type}`);
+    if (
+      fiber.fiberParent &&
+      fiber.currentDomElement &&
+      fiber.fiberParent.currentDomElement &&
+      fiber.fiberParent.currentDomElement instanceof HTMLElement
+    ) {
+      const domParent = fiber.fiberParent.currentDomElement;
+      domParent.appendChild(fiber.currentDomElement);
+      Reactify.log(`Appended ${fiber.type} to ${domParent.tagName}`);
+      if (fiber.child) Reactify.commitWork(fiber.child);
+      if (fiber.sibling) Reactify.commitWork(fiber.sibling);
     }
   }
 
   private static performUnitOfWork() {
-    Reactify.log("Processing nextUnitOfWork:", this.nextUnitOfWork);
-    if (!this.nextUnitOfWork) return;
+    Reactify.log("Processing nextUnitOfWork:", Reactify.nextUnitOfWork);
+    if (!Reactify.nextUnitOfWork) return;
 
-    if (!this.nextUnitOfWork.currentDomElement) {
-      this.nextUnitOfWork.currentDomElement = this.createDomElement(this.nextUnitOfWork);
+    if (!Reactify.nextUnitOfWork.currentDomElement) {
+      Reactify.nextUnitOfWork.currentDomElement = Reactify.createDomElement(Reactify.nextUnitOfWork);
     }
 
-    if (this.nextUnitOfWork.domParent && this.nextUnitOfWork.domParent.currentDomElement) {
-      if (this.nextUnitOfWork.domParent.currentDomElement instanceof HTMLElement) {
-        this.nextUnitOfWork.domParent.currentDomElement.append(
-          this.nextUnitOfWork.currentDomElement
-        );
-      }
-    }
-
-    const children = this.nextUnitOfWork.props.children;
+    const children = Reactify.nextUnitOfWork.props.children;
     let prevSibling: FiberNode | null = null;
 
     children.forEach((child, index) => {
-      if (!this.nextUnitOfWork) return;
+      if (!Reactify.nextUnitOfWork) return;
 
       const newFiber: FiberNode = {
         type: child.type,
         currentDomElement: null,
-        domParent: this.nextUnitOfWork,
+        fiberParent: Reactify.nextUnitOfWork,
         child: null,
         sibling: null,
         props: child.props,
       };
 
       if (index === 0) {
-        this.nextUnitOfWork.child = newFiber;
+        Reactify.nextUnitOfWork.child = newFiber;
       } else if (prevSibling) {
         prevSibling.sibling = newFiber;
       }
       prevSibling = newFiber;
     });
 
-    if (this.nextUnitOfWork.child) {
-      this.nextUnitOfWork = this.nextUnitOfWork.child;
+    if (Reactify.nextUnitOfWork.child) {
+      Reactify.nextUnitOfWork = Reactify.nextUnitOfWork.child;
       return;
     }
 
-    if (this.nextUnitOfWork.sibling) {
-      this.nextUnitOfWork = this.nextUnitOfWork.sibling;
+    if (Reactify.nextUnitOfWork.sibling) {
+      Reactify.nextUnitOfWork = Reactify.nextUnitOfWork.sibling;
       return;
     }
 
-    let ancestor = this.nextUnitOfWork.domParent;
+    let ancestor = Reactify.nextUnitOfWork.fiberParent;
     while (ancestor && !ancestor.sibling) {
-      ancestor = ancestor.domParent;
+      ancestor = ancestor.fiberParent;
     }
     if (ancestor && ancestor.sibling) {
-      this.nextUnitOfWork = ancestor.sibling;
+      Reactify.nextUnitOfWork = ancestor.sibling;
       return;
     }
 
-    this.nextUnitOfWork = null;
+    Reactify.nextUnitOfWork = null;
   }
 }
