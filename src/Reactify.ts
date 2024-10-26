@@ -83,6 +83,21 @@ export default class Reactify {
       Object.keys(fiberNode.props)
         .filter((key) => key !== "children")
         .forEach((key) => {
+          if (Reactify.isEvent(key)) {
+            const eventType = key.toLowerCase().substring(2);
+            const handler = fiberNode.props[key];
+            currentNode.addEventListener(eventType, handler);
+            Reactify.log(`Added event listener: ${eventType}`);
+            console.log(`Added event listener: ${eventType}`);
+          } else {
+            Reactify.log(`Setting property '${key}' to '${fiberNode.props[key]}' on DOM element`);
+            if (typeof fiberNode.props[key] === "boolean" || fiberNode.props[key] === null) {
+              // @ts-ignore
+              currentNode[key] = fiberNode.props[key]; // Direct assignment for boolean and null types
+            } else {
+              currentNode.setAttribute(key, fiberNode.props[key]); // Use setAttribute for other types
+            }
+          }
           currentNode.setAttribute(key, fiberNode.props[key]);
         });
     }
@@ -189,7 +204,7 @@ export default class Reactify {
   private static isEvent = (key: string) => key.startsWith("on");
   private static isProperty = (key: string) => key !== "children";
   private static isNew = (prevProps: Props, nextProps: Props) => (key: string) => prevProps[key] !== nextProps[key];
-  private static isGone = (nextProps: Props) => (key: string) => !(key in nextProps);
+  private static isGone = (nextProps: Props) => (key: string) => !(key in nextProps) || this.isEvent(key);
 
   private static updateDom(domElement: HTMLElement | Text, prevProps: Props, nextProps: Props) {
     if (domElement instanceof Text) {
