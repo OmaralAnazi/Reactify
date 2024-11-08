@@ -3,12 +3,14 @@ import Reactify from "./Reactify";
 // Reactify.setDebugMode(true);
 
 function App() {
+  const [showC, setShowC] = Reactify.useState(true);
   return (
     <div>
       <h1>Welcome to Reactify</h1>
+      <button onClick={() => setShowC(!showC)}>Toggle show C</button>
       <ComponentA title="Component A" content="This is the content of Component A." />
       <ComponentB title="Component B" content="This is the content of Component B." />
-      <ComponentC title="Component C" content="This is the content of Component C." />
+      {showC && <ComponentC title="Component C" content="This is the content of Component C." />}
     </div>
   );
 }
