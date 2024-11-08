@@ -1,49 +1,59 @@
 import Reactify from "./Reactify";
 
-Reactify.setDebugMode(true);
-const container = document.getElementById("app")!;
+// Reactify.setDebugMode(true);
 
-const element1 = (
-  <div id="root">
-    <h1>Hello, Reactify!</h1>
-    <p>This is a paragraph inside Reactify.</p>
-    <ul>
-      <li>Item 1</li>
-      <li>Item 2</li>
-      <li>Item 3</li>
-    </ul>
+function App() {
+  return (
     <div>
-      <span>Nested element 1</span>
-      <span>Nested element 2</span>
+      <h1>Welcome to Reactify</h1>
+      <ComponentA title="Component A" content="This is the content of Component A." />
+      <ComponentB title="Component B" content="This is the content of Component B." />
+      <ComponentC title="Component C" content="This is the content of Component C." />
     </div>
-    <footer>
-      <small>Footer content here</small>
-    </footer>
-  </div>
-);
-Reactify.render(element1, container);
+  );
+}
 
-const element2 = (
-  <div id="root2">
-    <h1>Hello, Reactify!</h1>
-    <p>This is a paragraph inside Reactify.</p>
-    <ul>
-      <li>First Item</li>
-      <li>Last Item</li>
-    </ul>
-    <footer>
-      <small>Footer content here</small>
-    </footer>
-    <button onClick={() => console.log("element2")}>Click me</button>
-  </div>
-);
-setTimeout(() => Reactify.render(element2, container), 1500);
+function ComponentA({ title, content }: any) {
+  const [counter, setCounter] = Reactify.useState(0);
 
-const element3 = (
-  <div id="root2">
-    <h1>Hello, Reactify!</h1>
-    <p>This is a paragraph inside Reactify.</p>
-    <button onClick={() => console.log("element3")}>Click me</button>
-  </div>
-);
-setTimeout(() => Reactify.render(element3, container), 3000);
+  return (
+    <div>
+      <h2>{title}</h2>
+      <p>
+        {content}, Counter: {counter}
+      </p>
+      <button onClick={() => setCounter(counter + 1)}>Click me</button>
+    </div>
+  );
+}
+
+function ComponentB({ title, content }: any) {
+  const [counter, setCounter] = Reactify.useState(0);
+
+  return (
+    <div>
+      <h2>{title}</h2>
+      <p>
+        {content}, Counter: {counter}
+      </p>
+      <button onClick={() => setCounter(counter + 1)}>Click me</button>
+    </div>
+  );
+}
+
+function ComponentC({ title, content }: any) {
+  const [counter, setCounter] = Reactify.useState(0);
+
+  return (
+    <div>
+      <h2>{title}</h2>
+      <p>
+        {content}, Counter: {counter}
+      </p>
+      <button onClick={() => setCounter(counter + 1)}>Click me</button>
+    </div>
+  );
+}
+
+const container = document.getElementById("app")!;
+Reactify.render(<App />, container);

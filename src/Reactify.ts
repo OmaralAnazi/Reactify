@@ -1,8 +1,14 @@
-export type ElementType = keyof HTMLElementTagNameMap | "TEXT_ELEMENT";
+export type ReactifyElementType = keyof HTMLElementTagNameMap | "TEXT_ELEMENT" | Function;
+export type FiberNodeElementType = keyof HTMLElementTagNameMap | "TEXT_ELEMENT" | Function;
 
 export type ReactifyElement = {
-  type: ElementType;
+  type: ReactifyElementType;
   props: Props;
+};
+
+export type Hook = {
+  state: any;
+  queue: Function[];
 };
 
 export type EffectTag = "UPDATE" | "PLACEMENT" | "DELETION";
@@ -13,7 +19,7 @@ export type Props = {
 };
 
 export type FiberNode = {
-  type: ElementType;
+  type: FiberNodeElementType;
   currentDomElement: HTMLElement | Text | null;
   parentFiber: FiberNode | null;
   child: FiberNode | null;
@@ -21,6 +27,8 @@ export type FiberNode = {
   alternate: FiberNode | null;
   effectTag: EffectTag;
   props: Props;
+  hooks?: Hook[];
+  hookIndex?: number;
 };
 
 export default class Reactify {
@@ -35,44 +43,68 @@ export default class Reactify {
     console.log(`[Reactify] Debug mode set to ${enabled ? "ON" : "OFF"}`);
   }
 
-  private static log(...args: any[]) {
+  private static logInfo(...args: any[]) {
     if (Reactify.debugMode) {
       console.log("[Reactify]", ...args);
     }
   }
 
+  private static logWarning(...args: any[]) {
+    console.warn("[Reactify]", ...args); // this should be displayed on the dev environment only...
+  }
+
+  private static logError(...args: any[]) {
+    console.error("[Reactify]", ...args);
+  }
+
   static createElement(
-    type: ElementType,
+    type: ReactifyElementType,
     props: Props | null = null,
     ...children: (ReactifyElement | string)[]
   ): ReactifyElement {
-    Reactify.log(`Creating element of type: ${type} with props: ${JSON.stringify(props)}`);
+    Reactify.logInfo(`Creating element of type: ${type} with props: ${JSON.stringify(props)}`);
     const element = {
       type,
       props: {
         ...props,
-        children: children.map((child) => (typeof child === "object" ? child : Reactify.createTextElement(child))),
+        children: children
+          .filter((child) => child !== "false" && child !== "true" && child != null)
+          .map((child) => {
+            if (typeof child === "object") {
+              return child;
+            } else if (typeof child === "string" || typeof child === "number") {
+              return Reactify.createTextElement(String(child));
+            }
+            Reactify.logInfo(`Encountered an unsupported child type in props; child will be ignored: ${child}`);
+            return null;
+          })
+          .filter((child) => child !== null),
       },
     };
-    Reactify.log(`Created element: ${element}`);
+    Reactify.logInfo(`Created element: ${element}`);
     return element;
   }
 
   private static createTextElement(text: string): ReactifyElement {
-    Reactify.log(`Creating text element for text: ${text}`);
+    Reactify.logInfo(`Creating text element for text: ${text}`);
     const textElement = {
-      type: "TEXT_ELEMENT" as ElementType,
+      type: "TEXT_ELEMENT" as ReactifyElementType,
       props: {
         value: text,
         children: [],
       },
     };
-    Reactify.log(`Created text element: ${textElement}`);
+    Reactify.logInfo(`Created text element: ${textElement}`);
     return textElement;
   }
 
   private static createDomElement(fiberNode: FiberNode) {
-    Reactify.log("Creating DOM element for fiber:", fiberNode);
+    if (fiberNode.type instanceof Function) {
+      Reactify.logInfo(`Skipping creation DOM element for invalid fiber node of type: ${fiberNode.type}`);
+      return;
+    }
+
+    Reactify.logInfo("Creating DOM element for fiber:", fiberNode);
     const isTextElement = fiberNode.type === "TEXT_ELEMENT";
     const DomElement = isTextElement
       ? document.createTextNode(fiberNode.props.value)
@@ -87,10 +119,9 @@ export default class Reactify {
             const eventType = key.toLowerCase().substring(2);
             const handler = fiberNode.props[key];
             currentNode.addEventListener(eventType, handler);
-            Reactify.log(`Added event listener: ${eventType}`);
-            console.log(`Added event listener: ${eventType}`);
+            Reactify.logInfo(`Added event listener: ${eventType}`);
           } else {
-            Reactify.log(`Setting property '${key}' to '${fiberNode.props[key]}' on DOM element`);
+            Reactify.logInfo(`Setting property '${key}' to '${fiberNode.props[key]}' on DOM element`);
             if (typeof fiberNode.props[key] === "boolean" || fiberNode.props[key] === null) {
               // @ts-ignore
               currentNode[key] = fiberNode.props[key]; // Direct assignment for boolean and null types
@@ -102,14 +133,14 @@ export default class Reactify {
         });
     }
 
-    Reactify.log("DOM element created:", DomElement);
+    Reactify.logInfo("DOM element created:", DomElement);
     return DomElement;
   }
 
   static render(reactifyElement: ReactifyElement, container: HTMLElement) {
-    Reactify.log("Starting render for element:", reactifyElement, "into container:", container);
+    Reactify.logInfo("Starting render for element:", reactifyElement, "into container:", container);
     Reactify.workInProgressRoot = Reactify.nextUnitOfWork = {
-      type: container.tagName as ElementType,
+      type: container.tagName as FiberNodeElementType,
       currentDomElement: container,
       parentFiber: null,
       child: null,
@@ -124,9 +155,9 @@ export default class Reactify {
   }
 
   private static workLoop(deadline: { timeRemaining: () => number }) {
-    Reactify.log("Starting work loop");
+    Reactify.logInfo("Starting work loop");
     while (Reactify.nextUnitOfWork && deadline.timeRemaining() > 0) {
-      Reactify.log("Performing unit of work:", Reactify.nextUnitOfWork);
+      Reactify.logInfo("Performing unit of work:", Reactify.nextUnitOfWork);
       Reactify.performUnitOfWork();
     }
     if (Reactify.nextUnitOfWork) {
@@ -137,67 +168,90 @@ export default class Reactify {
   }
 
   private static commitRoot() {
-    Reactify.log("Committing changes to root...");
-    Reactify.deletions.forEach(Reactify.commitWork);
+    Reactify.logInfo("Committing changes to root...");
+
+    // Process deletions using commitDeletion
+    Reactify.deletions.forEach((fiber) => {
+      let domParentFiber = fiber.parentFiber;
+      while (domParentFiber && !domParentFiber.currentDomElement) {
+        domParentFiber = domParentFiber.parentFiber;
+      }
+      if (domParentFiber && domParentFiber.currentDomElement) {
+        Reactify.commitDeletion(fiber, domParentFiber.currentDomElement as HTMLElement);
+      }
+    });
+
     if (Reactify.workInProgressRoot && Reactify.workInProgressRoot.child) {
       Reactify.commitWork(Reactify.workInProgressRoot.child);
       Reactify.currentRoot = Reactify.workInProgressRoot;
-      Reactify.log("Changes committed successfully.");
+      Reactify.logInfo("Changes committed successfully.");
       Reactify.workInProgressRoot = null;
     }
   }
 
   private static commitWork(fiber: FiberNode) {
-    Reactify.log(`Committing work for fiber: ${fiber.type}, Effect Tag: ${fiber.effectTag}`);
+    Reactify.logInfo(`Committing work for fiber: ${fiber.type}, Effect Tag: ${fiber.effectTag}`);
 
-    if (!fiber.parentFiber || !fiber.currentDomElement || !fiber.parentFiber.currentDomElement) {
-      Reactify.log(
-        `Skipping fiber due to missing parent or DOM elements. Type: ${fiber.type}, Effect Tag: ${fiber.effectTag}`
-      );
+    if (!fiber.parentFiber) {
+      Reactify.logError(`Skipping fiber due to missing parent. Type: ${fiber.type}, Effect Tag: ${fiber.effectTag}`);
       return;
     }
 
-    const domParent = fiber.parentFiber.currentDomElement;
-    Reactify.log(`Parent DOM found for fiber: ${fiber.type}, Parent Type: ${fiber.parentFiber.type}`);
+    if (!(fiber.type instanceof Function) && fiber.currentDomElement) {
+      let domParentFiber = fiber.parentFiber;
+      while (!domParentFiber.currentDomElement) {
+        domParentFiber = domParentFiber.parentFiber!;
+      }
+      const domParent = domParentFiber.currentDomElement;
 
-    switch (fiber.effectTag) {
-      case "PLACEMENT":
-        domParent.appendChild(fiber.currentDomElement);
-        Reactify.log(`Placed new DOM element for type: ${fiber.type} under parent: ${fiber.parentFiber.type}`);
-        break;
-      case "UPDATE":
-        if (fiber.alternate) {
-          Reactify.updateDom(fiber.currentDomElement, fiber.alternate.props, fiber.props);
-          Reactify.log(`Updated DOM element for type: ${fiber.type}`);
-        } else {
-          Reactify.log(`Skipped update for ${fiber.type} due to missing alternate fiber`);
-        }
-        break;
-      case "DELETION":
-        if (domParent.contains(fiber.currentDomElement)) {
-          domParent.removeChild(fiber.currentDomElement);
-          Reactify.log(`Removed DOM element for type: ${fiber.type}`);
-        } else {
-          Reactify.log(`Attempted to remove non-existent or already removed element for type: ${fiber.type}`);
-        }
-        break;
-      default:
-        Reactify.log(`Unhandled effect tag: ${fiber.effectTag} for type: ${fiber.type}`);
-        break;
+      Reactify.logInfo(`Parent DOM found for fiber: ${fiber.type}, Parent Type: ${fiber.parentFiber.type}`);
+
+      switch (fiber.effectTag) {
+        case "PLACEMENT":
+          domParent.appendChild(fiber.currentDomElement);
+          Reactify.logInfo(`Placed new DOM element for type: ${fiber.type} under parent: ${fiber.parentFiber.type}`);
+          break;
+        case "UPDATE":
+          if (fiber.alternate) {
+            Reactify.updateDom(fiber.currentDomElement, fiber.alternate.props, fiber.props);
+            Reactify.logInfo(`Updated DOM element for type: ${fiber.type}`);
+          } else {
+            Reactify.logError(`Skipped update for ${fiber.type} due to missing alternate fiber`);
+          }
+          break;
+        case "DELETION":
+          Reactify.commitDeletion(fiber, domParent as HTMLElement);
+          break;
+        default:
+          Reactify.logError(`Unhandled effect tag: ${fiber.effectTag} for type: ${fiber.type}`);
+          break;
+      }
     }
 
     if (fiber.child) {
-      Reactify.log(`Proceeding to commit child fiber of: ${fiber.type}`);
+      Reactify.logInfo(`Proceeding to commit child fiber of: ${fiber.type}`);
       Reactify.commitWork(fiber.child);
     } else {
-      Reactify.log(`No child fiber to commit for type: ${fiber.type}`);
+      Reactify.logInfo(`No child fiber to commit for type: ${fiber.type}`);
     }
 
     if (fiber.sibling) {
-      Reactify.log(`Proceeding to commit sibling fiber of: ${fiber.type}`);
+      Reactify.logInfo(`Proceeding to commit sibling fiber of: ${fiber.type}`);
       Reactify.commitWork(fiber.sibling);
     } else {
-      Reactify.log(`No sibling fiber to commit for type: ${fiber.type}`);
+      Reactify.logInfo(`No sibling fiber to commit for type: ${fiber.type}`);
+    }
+  }
+
+  private static commitDeletion(fiber: FiberNode, domParent: HTMLElement) {
+    if (fiber.currentDomElement) {
+      domParent.removeChild(fiber.currentDomElement);
+    } else {
+      let child = fiber.child;
+      while (child) {
+        Reactify.commitDeletion(child, domParent);
+        child = child.sibling;
+      }
     }
   }
 
@@ -209,14 +263,14 @@ export default class Reactify {
   private static updateDom(domElement: HTMLElement | Text, prevProps: Props, nextProps: Props) {
     if (domElement instanceof Text) {
       if (prevProps.value !== nextProps.value) {
-        Reactify.log(`Updating text content from '${prevProps.value}' to '${nextProps.value}'`);
+        Reactify.logInfo(`Updating text content from '${prevProps.value}' to '${nextProps.value}'`);
         domElement.nodeValue = nextProps.value;
       }
       return;
     }
 
     // Remove old properties or change event listeners
-    Reactify.log("Removing old or changed properties and event listeners...");
+    Reactify.logInfo("Removing old or changed properties and event listeners...");
     Object.keys(prevProps)
       .filter(Reactify.isProperty)
       .filter(Reactify.isGone(nextProps))
@@ -225,9 +279,9 @@ export default class Reactify {
           const eventType = key.toLowerCase().substring(2);
           const handler = prevProps[key];
           domElement.removeEventListener(eventType, handler);
-          Reactify.log(`Removed event listener: ${eventType}`);
+          Reactify.logInfo(`Removed event listener: ${eventType}`);
         } else {
-          Reactify.log(`Clearing property '${key}' from DOM element`);
+          Reactify.logInfo(`Clearing property '${key}' from DOM element`);
           // @ts-ignore
           if (typeof domElement[key] === "boolean" || typeof domElement[key] === "number") {
             // @ts-ignore
@@ -238,7 +292,7 @@ export default class Reactify {
         }
       });
 
-    Reactify.log("Setting new or changed properties...");
+    Reactify.logInfo("Setting new or changed properties...");
     Object.keys(nextProps)
       .filter(Reactify.isProperty)
       .filter(Reactify.isNew(prevProps, nextProps))
@@ -247,9 +301,9 @@ export default class Reactify {
           const eventType = key.toLowerCase().substring(2);
           const handler = nextProps[key];
           domElement.addEventListener(eventType, handler);
-          Reactify.log(`Added event listener: ${eventType}`);
+          Reactify.logInfo(`Added event listener: ${eventType}`);
         } else {
-          Reactify.log(`Setting property '${key}' to '${nextProps[key]}' on DOM element`);
+          Reactify.logInfo(`Setting property '${key}' to '${nextProps[key]}' on DOM element`);
           if (typeof nextProps[key] === "boolean" || nextProps[key] === null) {
             // @ts-ignore
             domElement[key] = nextProps[key]; // Direct assignment for boolean and null types
@@ -262,38 +316,72 @@ export default class Reactify {
 
   private static performUnitOfWork() {
     if (!Reactify.nextUnitOfWork) {
-      Reactify.log("No more work to perform.");
+      Reactify.logInfo("No more work to perform.");
       return;
     }
 
-    Reactify.log("Processing nextUnitOfWork:", Reactify.nextUnitOfWork);
+    Reactify.logInfo("Processing nextUnitOfWork:", Reactify.nextUnitOfWork);
+
+    if (Reactify.nextUnitOfWork.type instanceof Function) Reactify.updateFunctionComponent();
+    else Reactify.updateHostComponent();
+
+    Reactify.findNextUnitOfWork();
+  }
+
+  private static updateFunctionComponent() {
+    if (!Reactify.nextUnitOfWork) {
+      Reactify.logInfo("No more work to perform.");
+      return;
+    }
+
+    if (!(Reactify.nextUnitOfWork.type instanceof Function)) {
+      Reactify.logError("Attempted to update a component, but the component type is not a function.");
+      return;
+    }
+
+    const children = [Reactify.nextUnitOfWork.type(Reactify.nextUnitOfWork.props)] as ReactifyElement[];
+    Reactify.reconcileChildren(children);
+  }
+
+  private static updateHostComponent() {
+    if (!Reactify.nextUnitOfWork) {
+      Reactify.logInfo("No more work to perform.");
+      return;
+    }
 
     if (!Reactify.nextUnitOfWork.currentDomElement) {
-      Reactify.log("Creating DOM element for:", Reactify.nextUnitOfWork.type);
-      Reactify.nextUnitOfWork.currentDomElement = Reactify.createDomElement(Reactify.nextUnitOfWork);
+      Reactify.logInfo("Creating DOM element for:", Reactify.nextUnitOfWork.type);
+      Reactify.nextUnitOfWork.currentDomElement = Reactify.createDomElement(Reactify.nextUnitOfWork)!;
     }
 
     const children = Reactify.nextUnitOfWork.props.children;
-    Reactify.log("Reconciling children for:", Reactify.nextUnitOfWork.type);
+    Reactify.logInfo("Reconciling children for:", Reactify.nextUnitOfWork.type);
     Reactify.reconcileChildren(children);
+  }
+
+  private static findNextUnitOfWork() {
+    if (!Reactify.nextUnitOfWork) {
+      Reactify.logInfo("No more work units found, ending work loop.");
+      return;
+    }
 
     if (Reactify.nextUnitOfWork.child) {
-      Reactify.log("Moving to child of:", Reactify.nextUnitOfWork.type);
+      Reactify.logInfo("Moving to child of:", Reactify.nextUnitOfWork.type);
       Reactify.nextUnitOfWork = Reactify.nextUnitOfWork.child;
     } else if (Reactify.nextUnitOfWork.sibling) {
-      Reactify.log("Moving to sibling of:", Reactify.nextUnitOfWork.type);
+      Reactify.logInfo("Moving to sibling of:", Reactify.nextUnitOfWork.type);
       Reactify.nextUnitOfWork = Reactify.nextUnitOfWork.sibling;
     } else {
-      Reactify.log("No child or sibling, finding ancestor with sibling...");
+      Reactify.logInfo("No child or sibling, finding ancestor with sibling...");
       let ancestor = Reactify.nextUnitOfWork.parentFiber;
       while (ancestor && !ancestor.sibling) {
         ancestor = ancestor.parentFiber;
       }
       if (ancestor && ancestor.sibling) {
-        Reactify.log("Moving to sibling of ancestor:", ancestor.type);
+        Reactify.logInfo("Moving to sibling of ancestor:", ancestor.type);
         Reactify.nextUnitOfWork = ancestor.sibling;
       } else {
-        Reactify.log("No more work units found, ending work loop.");
+        Reactify.logInfo("No more work units found, ending work loop.");
         Reactify.nextUnitOfWork = null;
       }
     }
@@ -301,11 +389,11 @@ export default class Reactify {
 
   private static reconcileChildren(children: ReactifyElement[]) {
     if (!Reactify.nextUnitOfWork) {
-      Reactify.log("No work unit available to reconcile children.");
+      Reactify.logInfo("No work unit available to reconcile children.");
       return;
     }
 
-    Reactify.log("Reconciling children for fiber:", Reactify.nextUnitOfWork);
+    Reactify.logInfo("Reconciling children for fiber:", Reactify.nextUnitOfWork);
     let prevSibling: FiberNode | null = null;
     let oldFiber = Reactify.nextUnitOfWork.alternate && Reactify.nextUnitOfWork.alternate.child;
 
@@ -326,12 +414,12 @@ export default class Reactify {
           effectTag: "UPDATE",
           props: child.props,
         };
-        Reactify.log("Updating fiber for type:", child.type);
+        Reactify.logInfo("Updating fiber for type:", child.type);
       }
 
       if (child && !sameType) {
         newFiber = {
-          type: child.type,
+          type: child.type as FiberNodeElementType,
           currentDomElement: null,
           parentFiber: Reactify.nextUnitOfWork,
           child: null,
@@ -340,13 +428,13 @@ export default class Reactify {
           effectTag: "PLACEMENT",
           props: child.props,
         };
-        Reactify.log("Placing new fiber for type:", child.type);
+        Reactify.logInfo("Placing new fiber for type:", child.type);
       }
 
       if (oldFiber && !sameType) {
         oldFiber.effectTag = "DELETION";
         Reactify.deletions.push(oldFiber);
-        Reactify.log("Deleting fiber for type:", oldFiber.type);
+        Reactify.logInfo("Deleting fiber for type:", oldFiber.type);
       }
 
       if (oldFiber) {
@@ -362,6 +450,66 @@ export default class Reactify {
       index++;
     }
 
-    Reactify.log("Completed reconciling children for:", Reactify.nextUnitOfWork);
+    Reactify.logInfo("Completed reconciling children for:", Reactify.nextUnitOfWork);
+  }
+
+  static useState(initialValue: any) {
+    if (!Reactify.nextUnitOfWork) {
+      throw new Error("useState must be called within a component's render.");
+    }
+
+    const fiber = Reactify.nextUnitOfWork;
+    fiber.hooks = fiber.hooks || [];
+    fiber.hookIndex = fiber.hookIndex || 0;
+
+    const hookIndex = fiber.hookIndex;
+    const oldHook = fiber.alternate?.hooks?.[hookIndex];
+
+    const hook = oldHook || { state: initialValue, queue: [] };
+
+    // Process any queued state updates
+    hook.queue.forEach((action: Function) => {
+      hook.state = action(hook.state);
+    });
+    hook.queue = []; // Clear the queue after processing
+
+    const setState = (action: Function | any) => {
+      const newAction = typeof action === "function" ? action : () => action;
+      hook.queue.push(newAction);
+      Reactify.scheduleRender(fiber); // Trigger a re-render
+    };
+
+    fiber.hooks[hookIndex] = hook;
+    fiber.hookIndex++;
+
+    return [hook.state, setState]; // Return the state and setState function
+  }
+
+  private static scheduleRender(nextUnitOfWork: FiberNode) {
+    const workInProgressRoot = Reactify.findRoot(nextUnitOfWork);
+
+    Reactify.workInProgressRoot = {
+      type: workInProgressRoot.type,
+      currentDomElement: workInProgressRoot.currentDomElement,
+      parentFiber: null,
+      child: null,
+      sibling: null,
+      alternate: Reactify.currentRoot,
+      effectTag: "UPDATE",
+      props: workInProgressRoot.props,
+    };
+
+    Reactify.nextUnitOfWork = Reactify.workInProgressRoot;
+    Reactify.deletions = [];
+
+    requestIdleCallback((deadline) => Reactify.workLoop(deadline));
+  }
+
+  private static findRoot(fiber: FiberNode) {
+    let node = fiber;
+    while (node.parentFiber) {
+      node = node.parentFiber;
+    }
+    return node;
   }
 }
